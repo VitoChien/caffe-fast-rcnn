@@ -144,7 +144,7 @@ return val;
 template <typename Dtype>
 __global__ void ROIAlignForward(const int nthreads, const Dtype* bottom_data,
     const Dtype spatial_scale, const int channels, const int height,
-    const int width, const int pooled_height, const int pooled_width,
+    const int width, const int pooled_height, const int pooled_width, const int sampling_ratio,
     const Dtype* bottom_rois, const Dtype* extended_rois,
     Dtype* top_data) {
     
@@ -215,7 +215,7 @@ void ROIAlignLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
   // NOLINT_NEXT_LINE(whitespace/operators)
   ROIAlignForward<Dtype><<<CAFFE_GET_BLOCKS(count), CAFFE_CUDA_NUM_THREADS>>>(
       count, bottom_data, spatial_scale_, channels_, height_, width_,
-      pooled_height_, pooled_width_, bottom_rois, extended_rois, top_data);
+      pooled_height_, pooled_width_, sampling_ratio_, bottom_rois, extended_rois, top_data);
   CUDA_POST_KERNEL_CHECK;
 
 }
@@ -224,13 +224,13 @@ template <typename Dtype>
 __global__ void ROIAlignBackward(const int nthreads, const Dtype* top_diff,
     const int num_rois, const Dtype spatial_scale,
     const int channels, const int height, const int width,
-    const int pooled_height, const int pooled_width, Dtype* bottom_diff,
+    const int pooled_height, const int pooled_width, const int sampling_ratio, Dtype* bottom_diff,
     const Dtype* bottom_rois, const Dtype* extended_rois) {
     
   CUDA_KERNEL_LOOP(index, nthreads) {
     // (n, c, h, w) coords in bottom data
-    int w = index % width;
-    int h = (index / width) % height;
+    int pw = index % width;
+    int ph = (index / width) % height;
     int c = (index / width / height) % channels;
     int n = index / width / height / channels;
 
@@ -331,7 +331,7 @@ void ROIAlignLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
   // NOLINT_NEXT_LINE(whitespace/operators)
   ROIAlignBackward<Dtype><<<CAFFE_GET_BLOCKS(count), CAFFE_CUDA_NUM_THREADS>>>(
       count, top_diff, top[0]->num(), spatial_scale_, channels_,
-      height_, width_, pooled_height_, pooled_width_, bottom_diff, bottom_rois, extended_rois);
+      height_, width_, pooled_height_, pooled_width_, sampling_ratio_, bottom_diff, bottom_rois, extended_rois);
   CUDA_POST_KERNEL_CHECK;
     
 }

@@ -89,6 +89,7 @@ class ROIAlignLayer : public Layer<Dtype> {
   int pooled_height_;
   int pooled_width_;
   Dtype spatial_scale_;
+  Dtype sampling_ratio_;
 };
 
 template <typename Dtype>
