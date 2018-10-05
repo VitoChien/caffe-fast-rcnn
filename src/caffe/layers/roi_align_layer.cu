@@ -145,7 +145,7 @@ template <typename Dtype>
 __global__ void ROIAlignForward(const int nthreads, const Dtype* bottom_data,
     const Dtype spatial_scale, const int channels, const int height,
     const int width, const int pooled_height, const int pooled_width, const int sampling_ratio,
-    const Dtype* bottom_rois, const Dtype* extended_rois,
+    const Dtype* bottom_rois,
     Dtype* top_data) {
     
   CUDA_KERNEL_LOOP(index, nthreads) {
@@ -158,14 +158,14 @@ __global__ void ROIAlignForward(const int nthreads, const Dtype* bottom_data,
 
     // 指向下一批输入ROI的起始指针处
     const Dtype* offset_bottom_rois = bottom_rois + n * 5;
-    const Dtype* offset_extended_rois = extended_rois + n * 5;
+    // const Dtype* offset_extended_rois = extended_rois + n * 5;
     int roi_batch_ind = bottom_rois[0];
     // 将ROI在原图上的坐标映射到feature map上
     // 注意这里不对坐标进行四舍五入了
-    Dtype roi_start_w = offset_extended_rois[1] * spatial_scale;  // include
-    Dtype roi_start_h = offset_extended_rois[2] * spatial_scale;
-    Dtype roi_end_w = offset_extended_rois[3] * spatial_scale;
-    Dtype roi_end_h = offset_extended_rois[4] * spatial_scale;
+    Dtype roi_start_w = offset_bottom_rois[1] * spatial_scale;  // include
+    Dtype roi_start_h = offset_bottom_rois[2] * spatial_scale;
+    Dtype roi_end_w = offset_bottom_rois[3] * spatial_scale;
+    Dtype roi_end_h = offset_bottom_rois[4] * spatial_scale;
 
     Dtype roi_width = max(roi_end_w - roi_start_w, (Dtype)1.);
     Dtype roi_height = max(roi_end_h - roi_start_h, (Dtype)1.);
@@ -208,14 +208,13 @@ void ROIAlignLayer<Dtype>::Forward_gpu(const vector<Blob<Dtype>*>& bottom,
       const vector<Blob<Dtype>*>& top) {
   const Dtype* bottom_data = bottom[0]->gpu_data();
   const Dtype* bottom_rois = bottom[1]->gpu_data();
-  const Dtype* extended_rois = bottom[2]->gpu_data();
   Dtype* top_data = top[0]->mutable_gpu_data();
   int count = top[0]->count();
   
   // NOLINT_NEXT_LINE(whitespace/operators)
   ROIAlignForward<Dtype><<<CAFFE_GET_BLOCKS(count), CAFFE_CUDA_NUM_THREADS>>>(
       count, bottom_data, spatial_scale_, channels_, height_, width_,
-      pooled_height_, pooled_width_, sampling_ratio_, bottom_rois, extended_rois, top_data);
+      pooled_height_, pooled_width_, sampling_ratio_, bottom_rois, top_data);
   CUDA_POST_KERNEL_CHECK;
 
 }
