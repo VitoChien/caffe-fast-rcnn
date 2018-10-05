@@ -1,6 +1,6 @@
 // ------------------------------------------------------------------
 // Project: Multi Person Parser
-// Written by Ruihe Qian
+// Written by Bear
 // ------------------------------------------------------------------
 
 #include <cfloat>
@@ -13,6 +13,7 @@
 #include <stdlib.h>
   
 #include "caffe/fast_rcnn_layers.hpp"
+#include "caffe/util/gpu_util.cuh"
 
 using std::max;
 using std::min;

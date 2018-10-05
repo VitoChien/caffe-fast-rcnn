@@ -1,8 +1,11 @@
-#include <algorithm>
-#include <cfloat>
-#include <vector>
+// ------------------------------------------------------------------
+// Project: Multi Person Parser
+// Written by Tianrui Hui
+// ------------------------------------------------------------------
 
-#include "caffe/layers/roi_align_layer.hpp"
+#include <cfloat>
+
+#include "caffe/fast_rcnn_layers.hpp"
 
 using std::max;
 using std::min;
@@ -11,288 +14,214 @@ using std::ceil;
 
 namespace caffe {
 
-	template <typename Dtype>
-	double ROIAlignLayer<Dtype>::cubic_coeff(double x){
-		x = (x>0) ? x : -x;
-		if (x<1){
-			return 1 - 2 * x*x + x*x*x;
-		}
-		else if (x<2){
-			return 4 - 8 * x + 5 * x*x - x*x*x;
-		}
-		return 0;
-	}
+template <typename Dtype>
+void ROIAlignLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
+      const vector<Blob<Dtype>*>& top) {
+  // TODO: roi_align_param在哪实现?
+  ROIAlignParameter roi_align_param = this->layer_param_.roi_align_param();
+  CHECK_GT(roi_align_param.pooled_h(), 0)
+      << "pooled_h must be > 0";
+  CHECK_GT(roi_align_param.pooled_w(), 0)
+      << "pooled_w must be > 0";
+  // 经过Pooling后的feature map的高
+  pooled_height_ = roi_align_param.pooled_h();
+  // 经过Pooling后的feature map的宽
+  pooled_width_ = roi_align_param.pooled_w();
+  // feature map与输入图片之间的比值(默认为1/16)，这个feature map指roi pooling层的输入
+  spatial_scale_ = roi_align_param.spatial_scale();
+  LOG(INFO) << "Spatial scale: " << spatial_scale_;
+}
 
-	template <typename Dtype>
-	double ROIAlignLayer<Dtype>::ResampleCubic(double x, double y, const Dtype * pdfValue, int nWidth, int nHeight, int pool_index, int* argmax_data, Dtype* w_data)
-	{
-		Dtype dfCubicValue;
-		int i = x;
-		int j = y;
-		/*get adjacent 16 values*/
-		double values[4][4];
-		int temp_c, temp_r;
-		for (int r = j - 1, s = 0; r <= j + 2; r++, s++){
-			for (int c = i - 1, t = 0; c <= i + 2; c++, t++){
-				//todo: 判断16次，移出循环
-				temp_c = min(max(Dtype(c), Dtype(0)), Dtype(nWidth - 1));
-				temp_r = min(max(Dtype(r), Dtype(0)), Dtype(nHeight - 1));
-				values[s][t] = pdfValue[temp_r*nWidth + temp_c];
-				argmax_data[16 * pool_index + s * 4 + t] = temp_r*nWidth + temp_c;
-			}
-		}
-		/*calc the coeff*/
-		double u = x - i;
-		double v = y - j;
-		double A[4], C[4];
-		for (int distance = 1, s = 0; distance >= -2; distance--, s++){
-			A[s] = cubic_coeff(u + distance);
-			C[s] = cubic_coeff(v + distance);
-		}
-		
-		dfCubicValue = 0;
-		for (int s = 0; s < 4; s++) {
-			for (int t = 0; t < 4; t++) {
-				dfCubicValue += values[s][t] * A[t] * C[s];
-				w_data[16 * pool_index + s * 4 + t] = A[t] * C[s];
-			}
-		}
-		return dfCubicValue;
-	}
+template <typename Dtype>
+void ROIAlignLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
+      const vector<Blob<Dtype>*>& top) {
+  // 输入的feature map的channel数
+  channels_ = bottom[0]->channels();
+  // 输入的feature map的高
+  height_ = bottom[0]->height();
+  // 输入的feature map的宽
+  width_ = bottom[0]->width();
+  // 设置输出的形状(N,C,H,W)，N=ROI的个数，C=channels_，H=pooled_height_，W=pooled_width_
+  top[0]->Reshape(bottom[1]->num(), channels_, pooled_height_,
+      pooled_width_);
+  // max_idx_h的形状与top一致，是pooling输出的每一个点对应回feature map中响应最大的点的h坐标
+  // 数据类型应当是Dtype
+  max_idx_h.Reshape(bottom[1]->num(), channels_, pooled_height_,
+      pooled_width_);
+  // max_idx_w的形状与top一致，是pooling输出的每一个点对应回feature map中响应最大的点的h坐标
+  // 数据类型应当是Dtype
+  max_idx_w.Reshape(bottom[1]->num(), channels_, pooled_height_,
+      pooled_width_);
+}
 
+// 模板类型Dtype，应该一般都是double类型
+template <typename Dtype>
+void ROIAlignLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
+      const vector<Blob<Dtype>*>& top) {
+  // 输入有两部分组成，data和rois
+  const Dtype* bottom_data = bottom[0]->cpu_data();
+  const Dtype* bottom_rois = bottom[1]->cpu_data();
+  // Number of ROIs
+  int num_rois = bottom[1]->num();
+  int batch_size = bottom[0]->num();
+  int top_count = top[0]->count();
+  Dtype* top_data = top[0]->mutable_cpu_data();
+  caffe_set(top_count, Dtype(-FLT_MAX), top_data);
+  Dtype* argmax_data_h = max_idx_h.mutable_cpu_data();
+  caffe_set(top_count, Dtype(-1), argmax_data_h);
+  Dtype* argmax_data_w = max_idx_w.mutable_cpu_data();
+  caffe_set(top_count, Dtype(-1), argmax_data_w);
 
-	template <typename Dtype>
-	void ROIAlignLayer<Dtype>::LayerSetUp(const vector<Blob<Dtype>*>& bottom,
-		const vector<Blob<Dtype>*>& top) {
-		ROIPoolingParameter roi_pool_param = this->layer_param_.roi_pooling_param();
-		CHECK_GT(roi_pool_param.pooled_h(), 0)
-			<< "pooled_h must be > 0";
-		CHECK_GT(roi_pool_param.pooled_w(), 0)
-			<< "pooled_w must be > 0";
-		pooled_height_ = roi_pool_param.pooled_h();
-		pooled_width_ = roi_pool_param.pooled_w();
-		spatial_scale_ = roi_pool_param.spatial_scale();
-		pad_ratio_ = roi_pool_param.pad_ratio();
-		bi_type = roi_pool_param.bi_type();
-		is_multi_interpolate = roi_pool_param.is_multi_interpolate();
-		LOG(INFO) << "Spatial scale: " << spatial_scale_;
+  // For each ROI R = [batch_index x1 y1 x2 y2]: max pool over R
+  // batch_index表示这个ROI属于哪张图片，一般就是0，因为1个batch只有1张图片
+  for (int n = 0; n < num_rois; ++n) {
+    int roi_batch_ind = bottom_rois[0];
+    // 将ROI在原图上的坐标映射到feature map上
+    // 注意这里不对坐标进行四舍五入了
+    Dtype roi_start_w = bottom_rois[1] * spatial_scale_;
+    Dtype roi_start_h = bottom_rois[2] * spatial_scale_;
+    Dtype roi_end_w = bottom_rois[3] * spatial_scale_;
+    Dtype roi_end_h = bottom_rois[4] * spatial_scale_;
+    CHECK_GE(roi_batch_ind, 0);
+    CHECK_LT(roi_batch_ind, batch_size);
 
-	}
+    //Util Values
+    Dtype one = 1.0;
+    Dtype zero = 0.0;
 
-	template <typename Dtype>
-	void ROIAlignLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
-		const vector<Blob<Dtype>*>& top) {
-		channels_ = bottom[0]->channels();
-		height_ = bottom[0]->height();
-		width_ = bottom[0]->width();
-		top[0]->Reshape(bottom[1]->num(), channels_, pooled_height_,
-			pooled_width_);
-		//[index_lb, index_rb, index_lt, index_rt, w_lb, w_rb, w_lt, w_rt] for each top pixel
-		if (bi_type == BiCubic) {
-			bili_idx.Reshape(bottom[1]->num(), channels_, pooled_height_,
-				pooled_width_ * 16);
-			bili_w.Reshape(bottom[1]->num(), channels_, pooled_height_,
-				pooled_width_ * 16);
-		}
-		else {
-			bili_idx.Reshape(bottom[1]->num(), channels_, pooled_height_,
-				pooled_width_ * 4);
-			bili_w.Reshape(bottom[1]->num(), channels_, pooled_height_,
-				pooled_width_ * 4);
-		}
-	}
+    // 计算当前这个roi在feature map上面的宽高
+    Dtype roi_height = max(roi_end_h - roi_start_h, one);
+    Dtype roi_width = max(roi_end_w - roi_start_w, one);
 
-	template <typename Dtype>
-	void ROIAlignLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
-		const vector<Blob<Dtype>*>& top) {
-		const Dtype* bottom_data = bottom[0]->cpu_data();
-		const Dtype* bottom_rois = bottom[1]->cpu_data();
-		// Number of ROIs
-		int num_rois = bottom[1]->num();
-		int batch_size = bottom[0]->num();
-		int top_count = top[0]->count();
-		Dtype* top_data = top[0]->mutable_cpu_data();
-		caffe_set(top_count, Dtype(-FLT_MAX), top_data);
-		int* argmax_data = bili_idx.mutable_cpu_data();
-		Dtype* w_data = bili_w.mutable_cpu_data();
-		if (bi_type == BiCubic) {
-			caffe_set(top_count * 16, -1, argmax_data);
-			caffe_set(top_count * 16, Dtype(0), w_data);
-		}
-		else {
-			caffe_set(top_count * 4, -1, argmax_data);
-			caffe_set(top_count * 4, Dtype(0), w_data);
-		}
-		// For each ROI R = [batch_index x1 y1 x2 y2]: max pool over R
-		for (int n = 0; n < num_rois; ++n) {
-			int roi_batch_ind = bottom_rois[0];
-			CHECK_GE(roi_batch_ind, 0);
-			CHECK_LT(roi_batch_ind, batch_size);
+    // 计算pooling之后的feature map上的一个值对应于pooling之前的feature map上的大小
+    // 注：由于roi的大小不一致，所以每次都需要计算一次
+    // 要注意下面的Dtype实际上应该都是double，所以bin_size_h和bin_size_w都是浮点数
+    // bin_size_h： ROI中划分的子窗口的高度
+    const Dtype bin_size_h = roi_height / static_cast<Dtype>(pooled_height_);
+    // bin_size_h： ROI中划分的子窗口的宽度
+    const Dtype bin_size_w = roi_width / static_cast<Dtype>(pooled_width_);
 
-			// padding
-			Dtype pad_w, pad_h;
-			pad_w = (bottom_rois[3] - bottom_rois[1] + 1)*pad_ratio_;
-			pad_h = (bottom_rois[4] - bottom_rois[2] + 1)*pad_ratio_;
-			Dtype roi_start_w = (bottom_rois[1] - pad_w) * spatial_scale_;
-			Dtype roi_start_h = (bottom_rois[2] - pad_h) * spatial_scale_;
-			Dtype roi_end_w = (bottom_rois[3] + pad_w) * spatial_scale_;
-			Dtype roi_end_h = (bottom_rois[4] + pad_h) * spatial_scale_;
-			// clipping
-			roi_start_w = max(roi_start_w, Dtype(0)); roi_start_h = max(roi_start_h, Dtype(0));
-			int img_width = round(width_ / spatial_scale_);
-			int img_height = round(height_ / spatial_scale_);
-			roi_end_w = min(Dtype(img_width - 1), roi_end_w);
-			roi_end_h = min(Dtype(img_height - 1), roi_end_h);
+    // 找到对应的roi的feature map，如果input data的batch size为1
+    // 那么roi_batch_ind=0
+    const Dtype* batch_data = bottom_data + bottom[0]->offset(roi_batch_ind);
 
-			Dtype roi_height = max(roi_end_h - roi_start_h + 1, Dtype(1));
-			Dtype roi_width = max(roi_end_w - roi_start_w + 1, Dtype(1));
-			const Dtype bin_size_h = static_cast<Dtype>(roi_height)
-				/ static_cast<Dtype>(pooled_height_);
-			const Dtype bin_size_w = static_cast<Dtype>(roi_width)
-				/ static_cast<Dtype>(pooled_width_);
+    for (int c = 0; c < channels_; ++c) {
+      for (int ph = 0; ph < pooled_height_; ++ph) {
+        for (int pw = 0; pw < pooled_width_; ++pw) {
+          // Compute pooling region for this output unit:
+          //  start (included) = h * roi_height / pooled_height_
+          //  end (excluded) = (ph + 1) * roi_height / pooled_height_
+          // 计算output上的一点对应于input上面区域的大小[hstart, wstart, hend, wend]
+          // 把这个区域称作bin，论文中叫做sub window
+          // 这里每个bin的顶点坐标都是浮点数了
+          Dtype hstart = static_cast<Dtype>(ph) * bin_size_h;
+          Dtype wstart = static_cast<Dtype>(pw) * bin_size_w;
+          Dtype hend = static_cast<Dtype>(ph + 1)* bin_size_h;
+          Dtype wend =static_cast<Dtype>(pw + 1) * bin_size_w;
 
-			const Dtype* batch_data = bottom_data + bottom[0]->offset(roi_batch_ind);
+          // 上面四个坐标是把ROI的左上角点当作(0,0)点来算的
+          // 所以需要根据ROI左上角点在feature map中的实际坐标来平移一下
+          // 同时这每个bin的h相关坐标要>=0且<=height_，w相关坐标要>=0且<=width_
+          hstart = min(max(hstart + roi_start_h, zero), static_cast<Dtype>(height_));
+          hend = min(max(hend + roi_start_h, zero), static_cast<Dtype>(height_));
+          wstart = min(max(wstart + roi_start_w, zero), static_cast<Dtype>(width_));
+          wend = min(max(wend + roi_start_w, zero), static_cast<Dtype>(width_));
 
-			if (bi_type == BiCubic) {
-				for (int c = 0; c < channels_; ++c) {
-					for (int ph = 0; ph < pooled_height_; ++ph) {
-						for (int pw = 0; pw < pooled_width_; ++pw) {
-							Dtype hcenter = static_cast<Dtype>(ph + 0.5)* bin_size_h;
-							Dtype wcenter = static_cast<Dtype>(pw + 0.5)* bin_size_w;
-							hcenter = min(max(hcenter + roi_start_h, Dtype(0)), Dtype(height_ - 1));
-							wcenter = min(max(wcenter + roi_start_w, Dtype(0)), Dtype(width_ - 1));
-							const int pool_index = ph * pooled_width_ + pw;
-							top_data[pool_index] = ResampleCubic(wcenter, hcenter, batch_data, width_, height_, pool_index, argmax_data, w_data);
-						}
-					}
-					// Increment all data pointers by one channel
-					batch_data += bottom[0]->offset(0, 1);
-					top_data += top[0]->offset(0, 1);
-					argmax_data += bili_idx.offset(0, 1);
-					w_data += bili_w.offset(0, 1);
-				}
-			}
-			else {
-				Dtype fX0;
-				Dtype fX1;
-				Dtype fY0;
-				Dtype fY1;
-				Dtype fFactorA;
-				Dtype fFactorB;
-				Dtype fFactorC;
-				Dtype fFactorD;
+          bool is_empty = (hend <= hstart) || (wend <= wstart);
 
-				for (int c = 0; c < channels_; ++c) {
-					for (int ph = 0; ph < pooled_height_; ++ph) {
-						for (int pw = 0; pw < pooled_width_; ++pw) {
-							// Compute pooling region for this output unit:
-							//  start (included) = floor(ph * roi_height / pooled_height_)
-							//  end (excluded) = ceil((ph + 1) * roi_height / pooled_height_)
-							Dtype hcenter = static_cast<Dtype>(ph + 0.5)* bin_size_h;
-							Dtype wcenter = static_cast<Dtype>(pw + 0.5)* bin_size_w;
+          // pool_index指的是此时计算的output的值对应于output的位置
+          const int pool_index = ph * pooled_width_ + pw;
+          // 如果bin矩形不符合，此处output的值设为0，此处的对应于输入区域的最大值坐标都为-1
+          if (is_empty) {
+            top_data[pool_index] = 0.0;
+            argmax_data_h[pool_index] = -1.0;
+            argmax_data_w[pool_index] = -1.0;
+            continue;
+          }
 
-							hcenter = min(max(hcenter + roi_start_h, Dtype(0)), Dtype(height_ - 1));
-							wcenter = min(max(wcenter + roi_start_w, Dtype(0)), Dtype(width_ - 1));
+          // 遍历bin中点的步长
+          Dtype h_stride = (hend - hstart)/ 3.0;
+          Dtype w_stride = (wend - wstart)/ 3.0;
 
-							int hstart = min(max(hcenter, Dtype(0)), Dtype(height_ - 1));
-							int wstart = min(max(wcenter, Dtype(0)), Dtype(width_ - 1));
-							int hend = min(max(hstart + 1, 0), height_ - 1);
-							int wend = min(max(wstart + 1, 0), width_ - 1);
+          Dtype maxval = -FLT_MAX;
+          // If nothing is pooled, argmax = -1 causes nothing to be backprop'd
+          Dtype maxidx_h = -1;
+          Dtype maxidx_w = -1;
 
-							const int pool_index = ph * pooled_width_ + pw;
+          // 遍历output的值对应于input的区域块，才能取到input feature map上相应的响应值
+          for (Dtype h = hstart+h_stride; h <= hend-h_stride+0.01; h += max(h_stride, Dtype(0.01))) {
+            for (Dtype w = wstart+w_stride; w <= wend-w_stride+0.01; w += max(w_stride, Dtype(0.01))) {
 
-							fX0 = wcenter - wstart;
-							fX1 = wend - wcenter;
-							fY0 = hcenter - hstart;
-							fY1 = hend - hcenter;
-							fFactorA = fY1 * fX1;
-							fFactorB = fY1 * fX0;
-							fFactorC = fY0 * fX1;
-							fFactorD = fY0 * fX0;
+              // (h_min, w_min): (h, w)所在的1x1方格中左上角点的整数坐标
+              // (h_max, w_max): (h, w)所在的1x1方格中右下角点的整数坐标
+              int h_min = static_cast<int>(floor(static_cast<Dtype>(h)));
+              int w_min = static_cast<int>(floor(static_cast<Dtype>(w)));
+              int h_max = static_cast<int>(ceil(static_cast<Dtype>(h)));
+              int w_max = static_cast<int>(ceil(static_cast<Dtype>(w)));
 
-							top_data[pool_index] = batch_data[hstart * width_ + wstart] * fFactorA
-								+ batch_data[hstart * width_ + wend] * fFactorB
-								+ batch_data[hend * width_ + wstart] * fFactorC
-								+ batch_data[hend * width_ + wend] * fFactorD;
-							//[index_lb, index_rb, index_lt, index_rt, , w_lb, w_rb, w_lt, w_rt] for each top pixel
-							argmax_data[4 * pool_index + 0] = hstart * width_ + wstart;
-							argmax_data[4 * pool_index + 1] = hstart * width_ + wend;
-							argmax_data[4 * pool_index + 2] = hend * width_ + wstart;
-							argmax_data[4 * pool_index + 3] = hend * width_ + wend;
-							w_data[4 * pool_index + 0] = fFactorA;
-							w_data[4 * pool_index + 1] = fFactorB;
-							w_data[4 * pool_index + 2] = fFactorC;
-							w_data[4 * pool_index + 3] = fFactorD;
-						}
-					}
-					// Increment all data pointers by one channel
-					batch_data += bottom[0]->offset(0, 1);
-					top_data += top[0]->offset(0, 1);
-					argmax_data += bili_idx.offset(0, 1);
-					w_data += bili_w.offset(0, 1);
-				}
-			}
-			// Increment ROI data pointer
-			bottom_rois += bottom[1]->offset(1);
-		}
-	}
+              // 判断(h, w)所在的1x1方格中四个顶点是否都在feature map范围内
+              bool is_up_left_in = w_min >= 0 && w_min <= width_ - 1
+              && h_min >= 0 && h_min <= height_ - 1;
+              bool is_up_right_in = w_max >= 0 && w_max <= width_ - 1
+              && h_min >= 0 && h_min <= height_ - 1;
+              bool is_down_left_in = w_min >= 0 && w_min <= width_ - 1
+              && h_max >= 0 && h_max <= height_ - 1;
+              bool is_down_right_in = w_max >= 0 && w_max <= width_ - 1
+              && h_max >= 0 && h_max <= height_ - 1;
 
-	template <typename Dtype>
-	void ROIAlignLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
-		const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
-		if (propagate_down[1]) {
-			LOG(FATAL) << this->type()
-				<< " Layer cannot backpropagate to roi inputs.";
-		}
-		if (!propagate_down[0]) {
-			return;
-		}
-		const Dtype* bottom_rois = bottom[1]->cpu_data();
-		const Dtype* top_diff = top[0]->cpu_diff();
-		Dtype* bottom_diff = bottom[0]->mutable_cpu_diff();
-		caffe_set(bottom[0]->count(), Dtype(0.), bottom_diff);
-		const int* argmax_data = bili_idx.cpu_data();
-		const int num_rois = top[0]->num();
-		const Dtype* w_data = bili_w.cpu_data();
-		int argmax_index[16];
-		Dtype w[16];
-		int w_num = 4;
-		if (bi_type == BiCubic) {
-			w_num = 16;
-		}
+              // 算出(h, w)周围4个点在双线性插值中的权重
+              Dtype w_left_up =(1 - (h - h_min)) * (1 - (w - w_min));
+              Dtype w_right_down =(1 - (h_max - h)) * (1 - (w_max - w));
+              Dtype w_left_down = (1 - (h_max - h)) * (1 - (w - w_min));
+              Dtype w_right_up = (1 - (h - h_min)) * (1 - (w_max - w));
 
-		// Accumulate gradient over all ROIs
-		for (int roi_n = 0; roi_n < num_rois; ++roi_n) {
-			int roi_batch_ind = bottom_rois[roi_n * 5];
-			// Accumulate gradients over each bin in this ROI
-			for (int c = 0; c < channels_; ++c) {
-				for (int ph = 0; ph < pooled_height_; ++ph) {
-					for (int pw = 0; pw < pooled_width_; ++pw) {
-						int offset_top = ((roi_n * channels_ + c) * pooled_height_ + ph)
-							* pooled_width_ + pw;
-						for (int index = 0; index < w_num; ++index) {
-							argmax_index[index] = argmax_data[offset_top * w_num + index];
-							w[index] = w_data[offset_top * w_num + index];
-						}
-						for (int index = 0; index < w_num; ++index) {
-							if (argmax_index[index] >= 0) {
-								int offset_bottom = (roi_batch_ind * channels_ + c) * height_
-									* width_ + argmax_index[index];
-								bottom_diff[offset_bottom] += top_diff[offset_top] * w[index];
-							}
-						}
-					}
-				}
-			}
-		}
-	}
+              Dtype val = 0.0;
+              if(is_up_left_in)
+                val += w_left_up * batch_data[h_min * width_ + w_min];
+              if(is_up_right_in)
+                val += w_right_up * batch_data[h_min * width_ + w_max];
+              if(is_down_left_in)
+                val += w_left_down * batch_data[h_max * width_ + w_min];
+              if(is_down_right_in)
+                val += w_right_down * batch_data[h_max * width_ + w_max];
+
+              // val即为双线性插值得出的(h, w)点处feature map的响应值
+              // 记录下最大的响应值val及其在bin(即feature map)中的坐标
+              if (val > maxval) {
+                maxval = val;
+                maxidx_h = h;
+                maxidx_w = w;
+              }
+            }
+          }
+          top_data[pool_index] = maxval;
+          argmax_data_h[pool_index] = maxidx_h;
+          argmax_data_w[pool_index] = maxidx_w;
+        }
+      }
+      // Increment all data pointers by one channel
+      batch_data += bottom[0]->offset(0, 1);
+      top_data += top[0]->offset(0, 1);
+      argmax_data_h += max_idx_h.offset(0, 1);
+      argmax_data_w += max_idx_w.offset(0, 1);
+    }
+    // Increment ROI data pointer
+    bottom_rois += bottom[1]->offset(1);
+  }
+}
+
+template <typename Dtype>
+void ROIAlignLayer<Dtype>::Backward_cpu(const vector<Blob<Dtype>*>& top,
+      const vector<bool>& propagate_down, const vector<Blob<Dtype>*>& bottom) {
+  NOT_IMPLEMENTED;
+}
 
 
 #ifdef CPU_ONLY
-	STUB_GPU(ROIAlignLayer);
+STUB_GPU(ROIAlignLayer);
 #endif
 
-	INSTANTIATE_CLASS(ROIAlignLayer);
-	REGISTER_LAYER_CLASS(ROIAlign);
+INSTANTIATE_CLASS(ROIAlignLayer);
+REGISTER_LAYER_CLASS(ROIAlign);
 
 }  // namespace caffe
