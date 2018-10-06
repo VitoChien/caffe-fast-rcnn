@@ -44,14 +44,6 @@ void ROIAlignLayer<Dtype>::Reshape(const vector<Blob<Dtype>*>& bottom,
   // 设置输出的形状(N,C,H,W)，N=ROI的个数，C=channels_，H=pooled_height_，W=pooled_width_
   top[0]->Reshape(bottom[1]->num(), channels_, pooled_height_,
       pooled_width_);
-  // max_idx_h的形状与top一致，是pooling输出的每一个点对应回feature map中响应最大的点的h坐标
-  // 数据类型应当是Dtype
-  max_idx_h.Reshape(bottom[1]->num(), channels_, pooled_height_,
-      pooled_width_);
-  // max_idx_w的形状与top一致，是pooling输出的每一个点对应回feature map中响应最大的点的h坐标
-  // 数据类型应当是Dtype
-  max_idx_w.Reshape(bottom[1]->num(), channels_, pooled_height_,
-      pooled_width_);
 }
 
 // 模板类型Dtype，应该一般都是double类型
@@ -67,10 +59,6 @@ void ROIAlignLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
   int top_count = top[0]->count();
   Dtype* top_data = top[0]->mutable_cpu_data();
   caffe_set(top_count, Dtype(-FLT_MAX), top_data);
-  Dtype* argmax_data_h = max_idx_h.mutable_cpu_data();
-  caffe_set(top_count, Dtype(-1), argmax_data_h);
-  Dtype* argmax_data_w = max_idx_w.mutable_cpu_data();
-  caffe_set(top_count, Dtype(-1), argmax_data_w);
 
   // For each ROI R = [batch_index x1 y1 x2 y2]: max pool over R
   // batch_index表示这个ROI属于哪张图片，一般就是0，因为1个batch只有1张图片
@@ -134,8 +122,6 @@ void ROIAlignLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
           // 如果bin矩形不符合，此处output的值设为0，此处的对应于输入区域的最大值坐标都为-1
           if (is_empty) {
             top_data[pool_index] = 0.0;
-            argmax_data_h[pool_index] = -1.0;
-            argmax_data_w[pool_index] = -1.0;
             continue;
           }
 
@@ -195,15 +181,11 @@ void ROIAlignLayer<Dtype>::Forward_cpu(const vector<Blob<Dtype>*>& bottom,
             }
           }
           top_data[pool_index] = maxval;
-          argmax_data_h[pool_index] = maxidx_h;
-          argmax_data_w[pool_index] = maxidx_w;
         }
       }
       // Increment all data pointers by one channel
       batch_data += bottom[0]->offset(0, 1);
       top_data += top[0]->offset(0, 1);
-      argmax_data_h += max_idx_h.offset(0, 1);
-      argmax_data_w += max_idx_w.offset(0, 1);
     }
     // Increment ROI data pointer
     bottom_rois += bottom[1]->offset(1);
