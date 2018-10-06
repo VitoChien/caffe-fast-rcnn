@@ -68,8 +68,8 @@ class ROIAlignLayer : public Layer<Dtype> {
 
   virtual inline const char* type() const { return "ROIAlign"; }
 
-  virtual inline int MinBottomBlobs() const { return 3; }
-  virtual inline int MaxBottomBlobs() const { return 3; }
+  virtual inline int MinBottomBlobs() const { return 2; }
+  virtual inline int MaxBottomBlobs() const { return 2; }
   virtual inline int MinTopBlobs() const { return 1; }
   virtual inline int MaxTopBlobs() const { return 1; }
 
