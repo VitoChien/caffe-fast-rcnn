@@ -1121,7 +1121,7 @@ message ROIAlignParameter {
   // Multiplicative spatial scale factor to translate ROI coords from their
   // input scale to the scale used when pooling
   optional float spatial_scale = 3 [default = 1];
-  optional sampling_ratio = 4 [default = 0];
+  optional float sampling_ratio = 4 [default = 0];
 }
 
 message ScaleParameter {
