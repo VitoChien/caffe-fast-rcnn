@@ -159,7 +159,7 @@ __global__ void ROIAlignForward(const int nthreads, const Dtype* bottom_data,
     // 指向下一批输入ROI的起始指针处
     const Dtype* offset_bottom_rois = bottom_rois + n * 5;
     // const Dtype* offset_extended_rois = extended_rois + n * 5;
-    int roi_batch_ind = bottom_rois[0];
+    int roi_batch_ind = offset_bottom_rois[0];
     // 将ROI在原图上的坐标映射到feature map上
     // 注意这里不对坐标进行四舍五入了
     Dtype roi_start_w = offset_bottom_rois[1] * spatial_scale;  // include
