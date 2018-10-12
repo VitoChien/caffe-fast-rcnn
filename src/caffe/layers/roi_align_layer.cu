@@ -233,11 +233,9 @@ __global__ void ROIAlignBackward(const int nthreads, const Dtype* top_diff,
     int c = (index / width / height) % channels;
     int n = index / width / height / channels;
 
-    Dtype gradient = 0;
     // Accumulate gradient over all ROIs that pooled this element
-    for (int roi_n = 0; roi_n < num_rois; ++roi_n) {
       // offset_bottom_rois：用来遍历输入ROI的指针      
-      const Dtype* offset_bottom_rois = bottom_rois + roi_n * 5;
+      const Dtype* offset_bottom_rois = bottom_rois + n * 5;
       // const Dtype* offset_extended_rois = extended_rois + roi_n * 5;      
       
       int roi_batch_ind = offset_bottom_rois[0];
@@ -308,7 +306,6 @@ __global__ void ROIAlignBackward(const int nthreads, const Dtype* top_diff,
       } // iy
     } // CUDA_1D_KERNEL_LOOP
   } // RoIAlignBackward
-}
 
 
 
