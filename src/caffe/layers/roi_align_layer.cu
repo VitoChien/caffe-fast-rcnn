@@ -224,10 +224,10 @@ __global__ void ROIAlignBackward(const int nthreads, const Dtype* top_diff,
     
   CUDA_KERNEL_LOOP(index, nthreads) {
     // (n, c, h, w) coords in bottom data
-    int pw = index % width;
-    int ph = (index / width) % height;
-    int c = (index / width / height) % channels;
-    int n = index / width / height / channels;
+    int pw = index % pooled_width;
+    int ph = (index / pooled_width) % pooled_height;
+    int c = (index / pooled_width / pooled_height) % channels;
+    int n = index / pooled_width / pooled_height / channels;
 
     const Dtype* offset_bottom_rois = bottom_rois + n * 5;
     // const Dtype* offset_extended_rois = extended_rois + roi_n * 5;      
