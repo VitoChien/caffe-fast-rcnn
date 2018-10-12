@@ -313,7 +313,7 @@ void ROIAlignLayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
     
   const Dtype* top_diff = top[0]->gpu_diff();
   Dtype* bottom_diff = bottom[0]->mutable_gpu_diff();
-  const int count = top_diff[0]->count();
+  const int count = top[0]->count();
   caffe_gpu_set(count, Dtype(0.), bottom_diff);
   
   // NOLINT_NEXT_LINE(whitespace/operators)
