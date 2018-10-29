@@ -1488,4 +1488,5 @@ message ProposalParameter {
   optional int32 anchor_scale = 3 [default = 5];
   optional int32 anchor_ratio = 4 [default = 3];
   optional int32 max_rois = 5 [default = 300];
+  optional float nms_thresh = 6 [default = 0.7];
 }

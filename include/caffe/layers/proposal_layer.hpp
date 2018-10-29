@@ -76,7 +76,7 @@ class ProposalLayer : public Layer<Dtype> {
   int anchor_base_size_;
   vector<float> anchor_scale_; //anchor scale
   vector<float> anchor_ratio_; //anchor_ratio
-  vector<float> nms_thresh_; //nms_thresh
+  float nms_thresh_; //nms_thresh
 
   int max_rois_;
   vector<float> anchor_boxes_;
